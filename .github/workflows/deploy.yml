@@ -1,0 +1,36 @@
+name: Deploy Docs
+on:
+  push:
+    branches: [development, staging, main]
+    paths: ['docs/**', 'mkdocs.yml', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ fromJson('{"development":"dev","staging":"staging","main":"prod"}')[github.ref_name] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install mkdocs-material
+      - name: Substitute environment URLs
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+        run: |
+          find docs -name '*.md' -exec sed -i "s|{{BASE_URL}}|${BASE_URL}|g" {} +
+          sed -i "s|{{SITE_URL}}|${SITE_URL}|g" mkdocs.yml
+          sed -i "s|{{BASE_URL}}|${BASE_URL}|g" mkdocs.yml
+      - run: mkdocs build --site-dir _site_docs
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DOCS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+      - run: aws s3 sync _site_docs/ s3://${{ secrets.DOCS_BUCKET }}/ --delete
+      - run: aws cloudfront create-invalidation --distribution-id ${{ secrets.DISTRIBUTION_ID }} --paths "/doc/*"
